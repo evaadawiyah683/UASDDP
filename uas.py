@@ -3,6 +3,7 @@ import datetime
 import pandas as pd
 from dataclasses import dataclass, field
 from typing import List, Dict
+import base64
 
 @dataclass
 class Tabungan:
@@ -12,11 +13,20 @@ class Tabungan:
     Attributes:
         tujuan (str): The savings goal
         saldo (float): Current balance
+        bulan (int): Target month
         rekapan (List[Dict]): List of transaction records
     """
     tujuan: str = ''
     saldo: float = 0
+    target: float = 0
+    bulan: int = 0
     rekapan: List[Dict] = field(default_factory=list)
+
+    def set_target(self, jumlah: float):
+        self.target = jumlah
+
+    def get_target(self):
+        return self.target
 
     def setor(self, jumlah: float) -> str:
         """
@@ -50,10 +60,35 @@ class Tabungan:
             'Tanggal': datetime.date.today()
         })
         return f'Berhasil menarik Rp {jumlah:,.0f}. Saldo sekarang: Rp {self.saldo:,.0f}.'
+    
+# Streamlit UI
+
+# Fungsi untuk memuat gambar dari file lokal dan mengkonversinya ke base64
+def load_image(image_path):
+    with open(image_path, "rb") as img_file:
+        return base64.b64encode(img_file.read()).decode()
+    
+# Memuat gambar latar belakang
+image_path = "bank.jpg"
+image_base64 = load_image(image_path)
+
+# Menambahkan CSS untuk latar belakang gambar
+st.markdown(
+    f"""
+    <style>
+    .stApp {{
+        background-image: url('data:image/jpeg;base64,{image_base64}');
+        background-size: cover;
+        background-position: center;
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 # Initialize session state for savings
-if 'tabungan' not in st.session_state:
-    st.session_state.tabungan = Tabungan()
+if 'tabungan_dict' not in st.session_state:
+    st.session_state.tabungan_dict = {}
 
 def halaman_beranda():
     """
@@ -67,37 +102,35 @@ def halaman_beranda():
     # Goal Input
     col1, col2 = st.columns(2)
     with col1:
-        goal_name = st.text_input('Tujuan Tabungan', 
-                                  value=st.session_state.tabungan.tujuan, 
-                                  key='goal_input')
+        goal_name = st.text_input('Tujuan Tabungan', key='goal_input')
     with col2:
-        goal_amount = st.number_input('Target Dana (Rp)', 
-                                      min_value=0, 
-                                      value=0)
+        goal_amount = st.number_input('Target Dana (Rp)', min_value=0, value=0)
     
     # Timeline Section
     col3, col4 = st.columns(2)
     with col3:
-        months = st.number_input('Jangka Waktu (Bulan)', 
-                                 min_value=1, 
-                                 value=12)
+        months = st.number_input('Jangka Waktu (Bulan)', min_value=1, value=12)
     with col4:
-        start_date = st.date_input('Tanggal Mulai', 
-                                   datetime.date.today())
+        start_date = st.date_input('Tanggal Mulai', datetime.date.today())
     
     # Save Goal Button
     if st.button('Simpan Tujuan'):
-        # Update tabungan object with new goal
-        st.session_state.tabungan.tujuan = goal_name
-        
-        # Calculate monthly savings recommendation
-        if goal_amount > 0 and months > 0:
-            monthly_savings = goal_amount / months
-            st.success(f'Anda perlu menabung sebesar Rp {monthly_savings:,.0f} per bulan.')
-        
-        # Calculate end date
-        end_date = start_date + datetime.timedelta(weeks=4*months)
-        st.info(f'Target Pencapaian: {end_date.strftime("%d %B %Y")}')
+        if goal_name:
+            # Create new Tabungan object and add to session state
+            new_tabungan = Tabungan(tujuan=goal_name, target=goal_amount)
+            st.session_state.tabungan_dict[goal_name] = new_tabungan
+            new_tabungan.bulan = months
+
+            # Calculate monthly savings recommendation
+            if goal_amount > 0 and months > 0:
+                monthly_savings = goal_amount / months
+                st.success(f'Anda perlu menabung sebesar Rp {monthly_savings:,.0f} per bulan.')
+            
+            # Calculate end date
+            end_date = start_date + datetime.timedelta(weeks=4*months)
+            st.info(f'Target Pencapaian: {end_date.strftime("%d %B %Y")}')
+        else:
+            st.error('Nama tujuan tabungan tidak boleh kosong.')
 
 def halaman_setor():
     """
@@ -105,17 +138,24 @@ def halaman_setor():
     """
     st.title('Setor Dana')
     
-    # Saldo Saat Ini
-    st.metric('Saldo Saat Ini', f'Rp {st.session_state.tabungan.saldo:,.0f}')
+    # Select Tabungan
+    tabungan_list = list(st.session_state.tabungan_dict.keys())
+    selected_tabungan = st.selectbox('Pilih Tabungan', tabungan_list)
     
-    # Setor Dana Form
-    with st.form('setor_form'):
-        jumlah_setor = st.number_input('Jumlah Dana Disetor (Rp)', min_value=0)
-        submitted = st.form_submit_button('Setor')
+    if selected_tabungan:
+        tabungan = st.session_state.tabungan_dict[selected_tabungan]
         
-        if submitted:
-            result = st.session_state.tabungan.setor(jumlah_setor)
-            st.success(result)
+        # Saldo Saat Ini
+        st.metric('Saldo Saat Ini', f'Rp {tabungan.saldo:,.0f}')
+        
+        # Setor Dana Form
+        with st.form('setor_form'):
+            jumlah_setor = st.number_input('Jumlah Dana Disetor (Rp)', min_value=0)
+            submitted = st.form_submit_button('Setor')
+            
+            if submitted:
+                result = tabungan.setor(jumlah_setor)
+                st.success(result)
 
 def halaman_tarik():
     """
@@ -123,17 +163,24 @@ def halaman_tarik():
     """
     st.title('Tarik Dana')
     
-    # Saldo Saat Ini
-    st.metric('Saldo Saat Ini', f'Rp {st.session_state.tabungan.saldo:,.0f}')
+    # Select Tabungan
+    tabungan_list = list(st.session_state.tabungan_dict.keys())
+    selected_tabungan = st.selectbox('Pilih Tabungan', tabungan_list)
     
-    # Tarik Dana Form
-    with st.form('tarik_form'):
-        jumlah_tarik = st.number_input('Jumlah Dana Ditarik (Rp)', min_value=0)
-        submitted = st.form_submit_button('Tarik')
+    if selected_tabungan:
+        tabungan = st.session_state.tabungan_dict[selected_tabungan]
         
-        if submitted:
-            result = st.session_state.tabungan.tarik(jumlah_tarik)
-            st.success(result)
+        # Saldo Saat Ini
+        st.metric('Saldo Saat Ini', f'Rp {tabungan.saldo:,.0f}')
+        
+        # Tarik Dana Form
+        with st.form('tarik_form'):
+            jumlah_tarik = st.number_input('Jumlah Dana Ditarik (Rp)', min_value=0)
+            submitted = st.form_submit_button('Tarik')
+            
+            if submitted:
+                result = tabungan.tarik(jumlah_tarik)
+                st.success(result)
 
 def halaman_rekapan():
     """
@@ -141,37 +188,55 @@ def halaman_rekapan():
     """
     st.title('Rekapan Transaksi')
     
-    # Saldo Saat Ini
-    st.metric('Total Saldo', f'Rp {st.session_state.tabungan.saldo:,.0f}')
-    
-    # Tabel Rekapan
-    if st.session_state.tabungan.rekapan:
-        df_rekapan = pd.DataFrame(st.session_state.tabungan.rekapan)
+    # Pastikan ada data tabungan
+    if not st.session_state.tabungan_dict:
+        st.write("Belum ada tabungan yang tercatat.")
+        return
+
+    # Loop untuk menampilkan semua tabungan
+    for tabungan_name, tabungan in st.session_state.tabungan_dict.items():
+        st.subheader(f'Tabungan: {tabungan_name}')
         
-        # Format kolom
-        df_rekapan['Jumlah'] = df_rekapan['Jumlah'].apply(lambda x: f'Rp {x:,.0f}')
+        total_saldo = tabungan.saldo
+        target_saldo = tabungan.target
+        bulan = tabungan.bulan  # Jangka waktu dalam bulan
         
-        # Tampilkan tabel
-        st.table(df_rekapan)
-    else:
-        st.write("Belum ada transaksi.")
-    
-    # Grafik Ringkasan
-    if st.session_state.tabungan.rekapan:
-        st.subheader('Ringkasan Transaksi')
+        # Hitung tanggal target berdasarkan bulan
+        if bulan > 0:
+            today = datetime.date.today()
+            target_date = today + datetime.timedelta(weeks=4 * bulan)  # Estimasi 4 minggu per bulan
+            days_remaining = (target_date - today).days
+            
+            # Format pesan waktu tersisa
+            if days_remaining > 0:
+                time_remaining_msg = f"{days_remaining} hari lagi"
+            elif days_remaining == 0:
+                time_remaining_msg = "Hari ini adalah tanggal target."
+            else:
+                time_remaining_msg = f"Waktu target sudah lewat {abs(days_remaining)} hari."
+        else:
+            target_date = None
+            time_remaining_msg = "Tidak ada jangka waktu yang ditetapkan."
         
-        # Hitung total setor dan tarik
-        total_setor = sum(t['Jumlah'] for t in st.session_state.tabungan.rekapan if t['Tipe'] == 'Setor')
-        total_tarik = sum(t['Jumlah'] for t in st.session_state.tabungan.rekapan if t['Tipe'] == 'Tarik')
+        # Tampilkan metrik saldo dan target
+        st.metric('Total Saldo', f'Rp {total_saldo:,.0f}')
+        st.metric('Kurang Saldo', f'Rp {(total_saldo - target_saldo):,.0f}')
+        st.metric('Tanggal Target', target_date.strftime('%d %B %Y') if target_date else "Belum ditetapkan")
+        st.metric('Sisa Waktu', time_remaining_msg)
         
-        # Buat DataFrame untuk pie chart
-        summary_df = pd.DataFrame({
-            'Jenis': ['Setor', 'Tarik'],
-            'Jumlah': [total_setor, total_tarik]
-        })
-        
-        # Tampilkan pie chart
-        st.bar_chart(summary_df.set_index('Jenis'))
+        # Tabel Rekapan
+        if tabungan.rekapan:
+            df_rekapan = pd.DataFrame(tabungan.rekapan)
+            
+            # Format kolom
+            df_rekapan['Jumlah'] = df_rekapan['Jumlah'].apply(lambda x: f'Rp {x:,.0f}')
+            df_rekapan['Tanggal'] = df_rekapan['Tanggal'].apply(lambda x: x.strftime('%d %B %Y'))
+            
+            # Tampilkan tabel
+            st.table(df_rekapan)
+        else:
+            st.write("Belum ada transaksi.")
+
 
 def main():
     """
@@ -206,13 +271,13 @@ def main():
     3. Pantau perkembangan tabungan
     """)
 
-if __name__ == "_main_":
+if __name__ == "__main__":
     # Konfigurasi halaman Streamlit
-    st.set_page_config(
-        page_title='Aplikasi Tabungan Impian',
-        page_icon='💰',
-        layout='wide'
-    )
+    # st.set_page_config(
+    # page_title='Aplikasi Tabungan Impian',
+    # page_icon='💰',
+    # layout='wide'
+    # )
     
     # Jalankan aplikasi utama
-main()
+    main()
